@@ -37,7 +37,7 @@ from src.utils.frame_interpolation import init_frame_interpolation_model, batch_
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default='./configs/prompts/animation_audio.yaml')
+    parser.add_argument("--config", type=str, default='./configs/prompts/animation_audio1.yaml')
     parser.add_argument("-W", type=int, default=512)
     parser.add_argument("-H", type=int, default=512)
     parser.add_argument("-L", type=int)
@@ -60,7 +60,7 @@ def main():
         weight_dtype = torch.float16
     else:
         weight_dtype = torch.float32
-        
+
     audio_infer_config = OmegaConf.load(config.audio_inference_config)
     # prepare model
     a2m_model = Audio2MeshModel(audio_infer_config['a2m_model'])
@@ -135,7 +135,7 @@ def main():
 
     lmk_extractor = LMKExtractor()
     vis = FaceMeshVisualizer(forehead_edge=False)
-    
+
     if args.accelerate:
         frame_inter_model = init_frame_interpolation_model()
 
@@ -148,12 +148,12 @@ def main():
             ref_image_pil = Image.open(ref_image_path).convert("RGB")
             ref_image_np = cv2.cvtColor(np.array(ref_image_pil), cv2.COLOR_RGB2BGR)
             ref_image_np = cv2.resize(ref_image_np, (args.H, args.W))
-            
+
             face_result = lmk_extractor(ref_image_np)
             assert face_result is not None, "No face detected."
             lmks = face_result['lmks'].astype(np.float32)
             ref_pose = vis.draw_landmarks((ref_image_np.shape[1], ref_image_np.shape[0]), lmks, normed=True)
-            
+
             sample = prepare_audio_feature(audio_path, wav2vec_model_path=audio_infer_config['a2m_model']['model_path'])
             sample['audio_feature'] = torch.from_numpy(sample['audio_feature']).float().cuda()
             sample['audio_feature'] = sample['audio_feature'].unsqueeze(0)
@@ -163,7 +163,7 @@ def main():
             pred = pred.squeeze().detach().cpu().numpy()
             pred = pred.reshape(pred.shape[0], -1, 3)
             pred = pred + face_result['lmks3d']
-            
+
             if 'pose_temp' in config and config['pose_temp'] is not None:
                 pose_seq = np.load(config['pose_temp'])
                 mirrored_pose_seq = np.concatenate((pose_seq, pose_seq[-2:0:-1]), axis=0)
@@ -176,23 +176,23 @@ def main():
                 chunk_duration = 5 # 5 seconds
                 sr = 16000
                 fps = 30
-                chunk_size = sr * chunk_duration 
+                chunk_size = sr * chunk_duration
 
                 audio_chunks = list(sample['audio_feature'].split(chunk_size, dim=1))
-                seq_len_list = [chunk_duration*fps] * (len(audio_chunks) - 1) + [sample['seq_len'] % (chunk_duration*fps)] # 30 fps 
+                seq_len_list = [chunk_duration*fps] * (len(audio_chunks) - 1) + [sample['seq_len'] % (chunk_duration*fps)] # 30 fps
 
                 audio_chunks[-2] = torch.cat((audio_chunks[-2], audio_chunks[-1]), dim=1)
                 seq_len_list[-2] = seq_len_list[-2] + seq_len_list[-1]
                 del audio_chunks[-1]
                 del seq_len_list[-1]
-    
+
                 pose_seq = []
                 for audio, seq_len in zip(audio_chunks, seq_len_list):
                     pose_seq_chunk = a2p_model.infer(audio, seq_len, id_seed)
                     pose_seq_chunk = pose_seq_chunk.squeeze().detach().cpu().numpy()
                     pose_seq_chunk[:, :3] *= 0.5
                     pose_seq.append(pose_seq_chunk)
-                
+
                 pose_seq = np.concatenate(pose_seq, 0)
                 pose_seq = smooth_pose_seq(pose_seq, 7)
 
@@ -218,9 +218,9 @@ def main():
             for pose_image_np in pose_images[: args_L: sub_step]:
                 pose_image_np = cv2.resize(pose_image_np,  (width, height))
                 pose_list.append(pose_image_np)
-            
+
             pose_list = np.array(pose_list)
-            
+
             video_length = len(pose_list)
 
             pose_tensor = torch.stack(pose_tensor_list, dim=0)  # (f, c, h, w)
@@ -238,19 +238,11 @@ def main():
                 args.cfg,
                 generator=generator,
             ).videos
-            
+
             if args.accelerate:
                 video = batch_images_interpolation_tool(video, frame_inter_model, inter_frames=args.fi_step-1)
 
-            ref_image_tensor = pose_transform(ref_image_pil)  # (c, h, w)
-            ref_image_tensor = ref_image_tensor.unsqueeze(1).unsqueeze(
-                0
-            )  # (1, c, 1, h, w)
-            ref_image_tensor = repeat(
-                ref_image_tensor, "b c f h w -> b c (repeat f) h w", repeat=video.shape[2]
-            )
-            
-            video = torch.cat([ref_image_tensor, pose_tensor[:,:,:video.shape[2]], video], dim=0)
+
             save_path = f"{save_dir}/{ref_name}_{audio_name}_{args.H}x{args.W}_{int(args.cfg)}_{time_str}_noaudio.mp4"
             save_videos_grid(
                 video,
@@ -258,12 +250,23 @@ def main():
                 n_rows=3,
                 fps=args.fps,
             )
-            
+            #(modify)
+            # Record saved_output_path
+            new_save_path = save_path.replace('_noaudio.mp4', '.mp4')
+            print(f"{new_save_path}")
+            with open("/content/total_output.txt", "a") as file:
+              file.write("/content/AniPortrait/"+new_save_path + "\n")
+
+            with open('/content/output.txt', 'w+') as f:
+                # clear and write new save_path
+                f.write("/content/AniPortrait/"+new_save_path )
+                f.seek(0)
+                print(f.read())
+
             stream = ffmpeg.input(save_path)
             audio = ffmpeg.input(audio_path)
-            ffmpeg.output(stream.video, audio.audio, save_path.replace('_noaudio.mp4', '.mp4'), vcodec='copy', acodec='aac', shortest=None).run()
+            ffmpeg.output(stream.video, audio.audio,new_save_path , vcodec='copy', acodec='aac', shortest=None).run() # save_path.replace('_noaudio.mp4', '.mp4')
             os.remove(save_path)
 
 if __name__ == "__main__":
     main()
-    

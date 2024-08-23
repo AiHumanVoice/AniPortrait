@@ -1,3 +1,5 @@
+%%writefile /content/AniPortrait/src/utils/util.py
+
 import importlib
 import os
 import os.path as osp
@@ -11,7 +13,7 @@ import numpy as np
 import torch
 import torchvision
 from einops import rearrange
-from PIL import Image
+from PIL import Image,ImageDraw, ImageFont
 
 
 def seed_everything(seed):
@@ -83,11 +85,25 @@ def save_videos_from_pil(pil_images, path, fps=8):
     else:
         raise ValueError("Unsupported file type. Use .mp4 or .gif.")
 
-
+###(modify)
 def save_videos_grid(videos: torch.Tensor, path: str, rescale=False, n_rows=6, fps=8):
     videos = rearrange(videos, "b c t h w -> t b c h w")
     height, width = videos.shape[-2:]
     outputs = []
+
+    #png logo
+    png_path = "/content/drive/MyDrive/data/promethus_logo.png"
+    png_image = Image.open(png_path).convert("RGBA")
+    logo_size = (80,11)
+    png_image = png_image.resize(logo_size) # logo_size
+
+    font_path = "/content/drive/MyDrive/font/NanumSquareNeo-Variable.ttf"
+    text= "이 프로젝트를 상업적으로 이용하거나 사적이익을 위해서 사용하지 않습니다."
+
+    try:
+        font = ImageFont.truetype(font_path, size=8)
+    except IOError:
+        font = ImageFont.load_default()
 
     for x in videos:
         x = torchvision.utils.make_grid(x, nrow=n_rows)  # (c h w)
@@ -97,6 +113,13 @@ def save_videos_grid(videos: torch.Tensor, path: str, rescale=False, n_rows=6, f
         x = (x * 255).numpy().astype(np.uint8)
         x = Image.fromarray(x)
 
+        # Watermark - logo_png
+        x.paste(png_image,  (width - logo_size[0] - 10, 10), png_image)
+        # - text
+        draw = ImageDraw.Draw(x)
+        text_width, text_height = draw.textsize(text, font=font)
+        text_position = ((width - text_width) // 2, height - text_height - 10)
+        draw.text(text_position, text, (255, 255, 255), font=font)  # 흰색 텍스트 추가
         outputs.append(x)
 
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -133,7 +156,7 @@ def crop_face(img, lmk_extractor, expand=1.5):
 
     if result is None:
         return None
-    
+
     H, W, _ = img.shape
     lmks = result['lmks']
     lmks[:, 0] *= W
@@ -146,7 +169,7 @@ def crop_face(img, lmk_extractor, expand=1.5):
 
     width = x_max - x_min
     height = y_max - y_min
-    
+
     if width*height >= W*H*0.15:
         if W == H:
             return img
